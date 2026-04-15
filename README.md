@@ -256,7 +256,7 @@ npm start
 
 ## 👥 Авторы
 
-- **Разработка** — Команда VOG Chat
+- **Разработка** — [@zd08917](https://github.com/zd08917)
 - **Дизайн** — [Оригинальный макет в Figma](https://www.figma.com/design/Lnfc6uKGg9AOUjGRNFnXk5/%D0%9C%D0%B5%D1%81%D1%81%D0%B5%D0%BD%D0%B4%D0%B6%D0%B5%D1%80-%D0%BD%D0%B0%D0%BF%D0%BE%D0%B4%D0%BE%D0%B1%D0%B8%D0%B5-%D0%A2%D0%B5%D0%BB%D0%B5%D0%B3%D1%80%D0%B0%D0%BC)
 
 ## 📞 Поддержка
@@ -269,7 +269,7 @@ npm start
 
 <div align="center">
 
-**Сделано с ❤️ для удобного общения**
+**Сделано с ❤️ для удобного замешения меседжера MAX**
 
 [⬆️ Наверх](#-vog-chat---современный-мессенджер)
 
