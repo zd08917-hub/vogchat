@@ -8,6 +8,7 @@ import crypto from 'crypto';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import bcrypt from 'bcryptjs';
 
 dotenv.config();
 
@@ -81,6 +82,49 @@ const upload = multer({
     }
   }
 });
+
+// ======================
+// Вспомогательные функции для паролей
+// ======================
+
+/**
+ * Хэширует пароль с использованием bcrypt
+ */
+async function hashPassword(password: string): Promise<string> {
+  const saltRounds = 10;
+  return await bcrypt.hash(password, saltRounds);
+}
+
+/**
+ * Проверяет, соответствует ли пароль хэшу
+ */
+async function verifyPassword(password: string, hash: string): Promise<boolean> {
+  return await bcrypt.compare(password, hash);
+}
+
+/**
+ * Валидирует пароль по сложности
+ */
+function validatePassword(password: string): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  
+  if (password.length < 8) {
+    errors.push('Пароль должен содержать минимум 8 символов');
+  }
+  
+  if (!/[a-zA-Z]/.test(password)) {
+    errors.push('Пароль должен содержать хотя бы одну букву');
+  }
+  
+  if (!/\d/.test(password)) {
+    errors.push('Пароль должен содержать хотя бы одну цифру');
+  }
+  
+  return {
+    valid: errors.length === 0,
+    errors
+  };
+}
 
 // Простой маршрут для проверки
 app.get('/api/health', (req, res) => {
@@ -651,6 +695,312 @@ app.post('/api/auth/verify-code', async (req, res) => {
     res.status(500).json({ error: 'Internal server error', details: errorMessage });
   }
 });
+
+// ==================== ПАРОЛЬНАЯ АУТЕНТИФИКАЦИЯ ====================
+
+// Установить пароль для пользователя
+app.post('/api/auth/set-password', async (req, res) => {
+  try {
+    const { userId, password, currentPassword } = req.body;
+
+    if (!userId || !password) {
+      return res.status(400).json({ error: 'Необходимы userId и password' });
+    }
+
+    // Проверяем валидность пароля
+    const validation = validatePassword(password);
+    if (!validation.valid) {
+      return res.status(400).json({
+        error: 'Некорректный пароль',
+        details: validation.errors
+      });
+    }
+
+    // Получаем пользователя
+    const user = await db('users').where({ id: userId }).first();
+    if (!user) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    // Если у пользователя уже есть пароль, проверяем текущий
+    if (user.has_password && user.password_hash) {
+      if (!currentPassword) {
+        return res.status(400).json({
+          error: 'Требуется текущий пароль для изменения'
+        });
+      }
+      
+      const isCurrentValid = await verifyPassword(currentPassword, user.password_hash);
+      if (!isCurrentValid) {
+        return res.status(401).json({ error: 'Неверный текущий пароль' });
+      }
+    }
+
+    // Хэшируем новый пароль
+    const hashedPassword = await hashPassword(password);
+
+    // Обновляем пользователя
+    await db('users')
+      .where({ id: userId })
+      .update({
+        password_hash: hashedPassword,
+        has_password: true,
+        password_set_at: new Date().toISOString(),
+        preferred_login_method: 'password'
+      });
+
+    res.json({
+      success: true,
+      message: 'Пароль успешно установлен',
+      hasPassword: true,
+      preferredLoginMethod: 'password'
+    });
+  } catch (error) {
+    console.error('Error setting password:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: 'Ошибка установки пароля', details: errorMessage });
+  }
+});
+
+// Вход по паролю
+app.post('/api/auth/login-password', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Необходимы email и password' });
+    }
+
+    // Находим пользователя по email
+    const user = await db('users').where({ email }).first();
+    if (!user) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    // Проверяем, есть ли у пользователя пароль
+    if (!user.has_password || !user.password_hash) {
+      return res.status(400).json({
+        error: 'У пользователя не установлен пароль',
+        requiresEmailCode: true
+      });
+    }
+
+    // Проверяем пароль
+    const isValid = await verifyPassword(password, user.password_hash);
+    if (!isValid) {
+      return res.status(401).json({ error: 'Неверный пароль' });
+    }
+
+    // Обновляем время последнего входа (используем last_seen, если нет отдельной колонки)
+    await db('users')
+      .where({ id: user.id })
+      .update({ last_seen: new Date().toISOString() });
+
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        avatarUrl: user.avatar_url,
+        hasPassword: user.has_password,
+        preferredLoginMethod: user.preferred_login_method || 'email_code'
+      }
+    });
+  } catch (error) {
+    console.error('Error logging in with password:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: 'Ошибка входа по паролю', details: errorMessage });
+  }
+});
+
+// Проверить, есть ли у пользователя пароль
+app.get('/api/auth/has-password', async (req, res) => {
+  try {
+    const { userId } = req.query;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'Необходим userId' });
+    }
+
+    const user = await db('users')
+      .where({ id: userId })
+      .select('has_password', 'preferred_login_method')
+      .first();
+
+    if (!user) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    res.json({
+      hasPassword: user.has_password || false,
+      preferredLoginMethod: user.preferred_login_method || 'email_code'
+    });
+  } catch (error) {
+    console.error('Error checking password status:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: 'Ошибка проверки пароля', details: errorMessage });
+  }
+});
+
+// Установить предпочтительный способ входа
+app.post('/api/auth/preferred-login-method', async (req, res) => {
+  try {
+    const { userId, method } = req.body;
+
+    if (!userId || !method) {
+      return res.status(400).json({ error: 'Необходимы userId и method' });
+    }
+
+    if (!['password', 'email_code'].includes(method)) {
+      return res.status(400).json({ error: 'Некорректный метод входа' });
+    }
+
+    // Проверяем, может ли пользователь использовать этот метод
+    const user = await db('users').where({ id: userId }).first();
+    if (!user) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    if (method === 'password' && !user.has_password) {
+      return res.status(400).json({
+        error: 'Нельзя установить парольный вход без пароля',
+        requiresPasswordSetup: true
+      });
+    }
+
+    // Обновляем предпочтительный метод
+    await db('users')
+      .where({ id: userId })
+      .update({ preferred_login_method: method });
+
+    res.json({
+      success: true,
+      preferredLoginMethod: method
+    });
+  } catch (error) {
+    console.error('Error setting preferred login method:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: 'Ошибка установки метода входа', details: errorMessage });
+  }
+});
+
+// Запрос сброса пароля
+app.post('/api/auth/reset-password-request', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: 'Необходим email' });
+    }
+
+    // Проверяем, существует ли пользователь
+    const user = await db('users').where({ email }).first();
+    if (!user) {
+      // Для безопасности не сообщаем, что пользователь не существует
+      return res.json({
+        success: true,
+        message: 'Если пользователь с таким email существует, ему будет отправлен код сброса'
+      });
+    }
+
+    // Проверяем, есть ли у пользователя пароль
+    if (!user.has_password) {
+      return res.status(400).json({
+        error: 'У пользователя не установлен пароль',
+        requiresEmailCode: true
+      });
+    }
+
+    // Генерируем код сброса
+    const resetCode = generateCode();
+    
+    // Сохраняем код в базе
+    await db('verification_codes').insert({
+      user_id: user.id,
+      code: resetCode,
+      purpose: 'password_reset',
+      expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString() // 15 минут
+    });
+
+    // Отправляем email с кодом сброса
+    const emailResult = await sendVerificationCode(email, resetCode, 'password_reset');
+
+    res.json({
+      success: true,
+      message: 'Код сброса пароля отправлен на email',
+      emailSent: emailResult.success,
+      userId: user.id
+    });
+  } catch (error) {
+    console.error('Error requesting password reset:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: 'Ошибка запроса сброса пароля', details: errorMessage });
+  }
+});
+
+// Сброс пароля с кодом
+app.post('/api/auth/reset-password', async (req, res) => {
+  try {
+    const { userId, code, newPassword } = req.body;
+
+    if (!userId || !code || !newPassword) {
+      return res.status(400).json({ error: 'Необходимы userId, code и newPassword' });
+    }
+
+    // Проверяем валидность пароля
+    const validation = validatePassword(newPassword);
+    if (!validation.valid) {
+      return res.status(400).json({
+        error: 'Некорректный пароль',
+        details: validation.errors
+      });
+    }
+
+    // Проверяем код сброса
+    const verification = await db('verification_codes')
+      .where({
+        user_id: userId,
+        code: code,
+        purpose: 'password_reset',
+        used: false
+      })
+      .where('expires_at', '>', new Date().toISOString())
+      .first();
+
+    if (!verification) {
+      return res.status(400).json({ error: 'Неверный или просроченный код сброса' });
+    }
+
+    // Хэшируем новый пароль
+    const hashedPassword = await hashPassword(newPassword);
+
+    // Обновляем пароль пользователя
+    await db('users')
+      .where({ id: userId })
+      .update({
+        password_hash: hashedPassword,
+        has_password: true,
+        password_set_at: new Date().toISOString()
+      });
+
+    // Помечаем код как использованный
+    await db('verification_codes')
+      .where({ id: verification.id })
+      .update({ used: true });
+
+    res.json({
+      success: true,
+      message: 'Пароль успешно сброшен'
+    });
+  } catch (error) {
+    console.error('Error resetting password:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: 'Ошибка сброса пароля', details: errorMessage });
+  }
+});
+
+// ==================== КОНЕЦ ПАРОЛЬНОЙ АУТЕНТИФИКАЦИИ ====================
 
 // Загрузить файл (аватар или вложение)
 app.post('/api/upload', upload.single('file'), async (req, res) => {

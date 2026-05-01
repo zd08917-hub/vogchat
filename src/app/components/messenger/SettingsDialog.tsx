@@ -11,10 +11,11 @@ import { VisuallyHidden } from "../ui/visually-hidden";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { Label } from "../ui/label";
-import { Bell, Lock, Moon, Sun, Monitor, LogOut } from "lucide-react";
+import { Bell, Lock, Moon, Sun, Monitor, LogOut, Key } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Separator } from "../ui/separator";
 import { toast } from "sonner";
+import SecuritySettings from "./SecuritySettings";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -224,6 +225,25 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                 />
               </div>
             </div>
+          </div>
+
+          <Separator className="dark:bg-gray-800" />
+
+          {/* Security Settings */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <Key className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+              <h3 className="font-medium dark:text-white">Безопасность</h3>
+            </div>
+            <SecuritySettings
+              userId={localStorage.getItem("registeredUser") || ""}
+              onLogout={() => {
+                localStorage.removeItem("isAuthenticated");
+                localStorage.removeItem("registeredUser");
+                toast.success("Вы вышли из системы");
+                navigate("/register");
+              }}
+            />
           </div>
 
           <Separator className="dark:bg-gray-800" />

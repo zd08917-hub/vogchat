@@ -3,7 +3,7 @@ import { useNavigate } from "react-router";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
-import { Mail, AlertCircle } from "lucide-react";
+import { Mail, AlertCircle, Lock, Key } from "lucide-react";
 import { toast } from "sonner";
 import {
   InputOTP,
@@ -15,11 +15,14 @@ import { validateForm, loginRules, getFieldError } from "../utils/validation";
 export default function Login() {
   const navigate = useNavigate();
   const [step, setStep] = useState<"email" | "verification">("email");
+  const [loginMethod, setLoginMethod] = useState<"email_code" | "password">("email_code");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [touchedFields, setTouchedFields] = useState<Record<string, boolean>>({});
+  const [checkingPasswordStatus, setCheckingPasswordStatus] = useState(false);
 
   // Валидация формы email
   const validateEmailForm = () => {
@@ -41,6 +44,7 @@ export default function Login() {
   const handleFieldChange = (field: string, value: string) => {
     if (field === 'email') setEmail(value);
     if (field === 'code') setCode(value);
+    if (field === 'password') setPassword(value);
 
     // Помечаем поле как "тронутое"
     setTouchedFields(prev => ({ ...prev, [field]: true }));
@@ -68,6 +72,57 @@ export default function Login() {
     setTouchedFields({});
   }, [step]);
 
+  // Проверить, есть ли у пользователя пароль
+  const checkPasswordStatus = async () => {
+    if (!email || !validateEmailForm()) {
+      setTouchedFields(prev => ({ ...prev, email: true }));
+      return;
+    }
+
+    setCheckingPasswordStatus(true);
+    try {
+      // Сначала ищем пользователя по email
+      const userResponse = await fetch(`http://localhost:3001/api/users?email=${encodeURIComponent(email)}`);
+      const users = await userResponse.json();
+      
+      if (!users || users.length === 0) {
+        // Пользователь не найден, предлагаем зарегистрироваться
+        toast.info("Пользователь не найден. Зарегистрируйтесь, чтобы создать аккаунт.");
+        navigate("/register");
+        return;
+      }
+
+      const user = users[0];
+      
+      // Проверяем, есть ли у пользователя пароль
+      const response = await fetch(`http://localhost:3001/api/auth/has-password?userId=${user.id}`);
+      const data = await response.json();
+      
+      if (response.ok) {
+        if (data.hasPassword) {
+          // У пользователя есть пароль, предлагаем выбор метода входа
+          setLoginMethod("password");
+          toast.info("У вас есть пароль. Вы можете войти по паролю или получить код на email.");
+        } else {
+          // У пользователя нет пароля, используем email-код
+          setLoginMethod("email_code");
+          handleSendCode();
+        }
+      } else {
+        // Если ошибка, используем email-код по умолчанию
+        setLoginMethod("email_code");
+        handleSendCode();
+      }
+    } catch (error) {
+      console.error("Failed to check password status:", error);
+      // В случае ошибки используем email-код
+      setLoginMethod("email_code");
+      handleSendCode();
+    } finally {
+      setCheckingPasswordStatus(false);
+    }
+  };
+
   const handleSendCode = async () => {
     // Валидация формы
     if (!validateEmailForm()) {
@@ -93,6 +148,54 @@ export default function Login() {
       }
     } catch (error) {
       console.error("Failed to send code:", error);
+      toast.error("Ошибка сети");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Вход по паролю
+  const handlePasswordLogin = async () => {
+    if (!validateEmailForm()) {
+      setTouchedFields(prev => ({ ...prev, email: true }));
+      return;
+    }
+
+    if (!password) {
+      toast.error("Введите пароль");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch('http://localhost:3001/api/auth/login-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok) {
+        // Сохраняем данные пользователя
+        localStorage.setItem('isAuthenticated', 'true');
+        localStorage.setItem('registeredUser', JSON.stringify(data.user));
+        localStorage.setItem('currentUserId', data.user.id);
+        
+        toast.success("Вход выполнен успешно!");
+        navigate("/");
+      } else {
+        if (data.requiresEmailCode) {
+          // Если у пользователя нет пароля, предлагаем войти по email-коду
+          toast.info("У вас не установлен пароль. Используйте вход по email-коду.");
+          setLoginMethod("email_code");
+          handleSendCode();
+        } else {
+          toast.error(data.error || "Неверный пароль");
+        }
+      }
+    } catch (error) {
+      console.error("Failed to login with password:", error);
       toast.error("Ошибка сети");
     } finally {
       setLoading(false);
@@ -143,12 +246,42 @@ export default function Login() {
             Вход в мессенджер
           </h1>
           <p className="text-gray-600 dark:text-gray-300">
-            Введите email для получения кода подтверждения
+            {loginMethod === "password"
+              ? "Введите email и пароль для входа"
+              : "Введите email для получения кода подтверждения"}
           </p>
         </div>
 
         {step === "email" ? (
           <div className="space-y-6">
+            {/* Переключатель метода входа */}
+            <div className="flex items-center justify-center space-x-4 mb-4">
+              <button
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors ${
+                  loginMethod === "email_code"
+                    ? "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300"
+                    : "bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600"
+                }`}
+                onClick={() => setLoginMethod("email_code")}
+                disabled={loading || checkingPasswordStatus}
+              >
+                <Mail className="w-4 h-4" />
+                <span>Email код</span>
+              </button>
+              <button
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors ${
+                  loginMethod === "password"
+                    ? "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300"
+                    : "bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600"
+                }`}
+                onClick={() => setLoginMethod("password")}
+                disabled={loading || checkingPasswordStatus}
+              >
+                <Lock className="w-4 h-4" />
+                <span>Пароль</span>
+              </button>
+            </div>
+
             <div className="space-y-2">
               <Label htmlFor="email" className="text-gray-700 dark:text-gray-300">
                 Email
@@ -165,7 +298,7 @@ export default function Login() {
                   value={email}
                   onChange={(e) => handleFieldChange('email', e.target.value)}
                   onBlur={() => setTouchedFields(prev => ({ ...prev, email: true }))}
-                  disabled={loading}
+                  disabled={loading || checkingPasswordStatus}
                 />
               </div>
               {validationErrors.email && touchedFields.email && (
@@ -176,13 +309,70 @@ export default function Login() {
               )}
             </div>
 
+            {/* Поле для пароля (только при выборе метода "пароль") */}
+            {loginMethod === "password" && (
+              <div className="space-y-2">
+                <Label htmlFor="password" className="text-gray-700 dark:text-gray-300">
+                  Пароль
+                </Label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+                  <Input
+                    id="password"
+                    type="password"
+                    placeholder="Введите ваш пароль"
+                    className={`pl-10 dark:bg-gray-700 dark:border-gray-600 dark:text-white ${
+                      validationErrors.password && touchedFields.password ? 'border-red-500 dark:border-red-500' : ''
+                    }`}
+                    value={password}
+                    onChange={(e) => handleFieldChange('password', e.target.value)}
+                    onBlur={() => setTouchedFields(prev => ({ ...prev, password: true }))}
+                    disabled={loading}
+                  />
+                </div>
+                {validationErrors.password && touchedFields.password && (
+                  <div className="flex items-center gap-1 text-red-500 text-sm">
+                    <AlertCircle className="w-4 h-4" />
+                    <span>{validationErrors.password}</span>
+                  </div>
+                )}
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Минимум 8 символов, должны быть буквы и цифры
+                </p>
+              </div>
+            )}
+
+            {/* Кнопка входа в зависимости от выбранного метода */}
             <Button
               className="w-full bg-blue-600 hover:bg-blue-700 text-white"
-              onClick={handleSendCode}
-              disabled={loading}
+              onClick={loginMethod === "password" ? handlePasswordLogin : checkPasswordStatus}
+              disabled={loading || checkingPasswordStatus}
             >
-              {loading ? "Отправка..." : "Получить код"}
+              {loading ? (
+                "Вход..."
+              ) : checkingPasswordStatus ? (
+                "Проверка..."
+              ) : loginMethod === "password" ? (
+                "Войти по паролю"
+              ) : (
+                "Продолжить"
+              )}
             </Button>
+
+            {/* Ссылка на восстановление пароля */}
+            {loginMethod === "password" && (
+              <div className="text-center">
+                <button
+                  className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
+                  onClick={() => {
+                    toast.info("Функция восстановления пароля будет доступна в настройках безопасности");
+                  }}
+                  disabled={loading}
+                >
+                  Забыли пароль?
+                </button>
+              </div>
+            )}
 
             <div className="text-center">
               <p className="text-gray-600 dark:text-gray-300 text-sm">
@@ -190,6 +380,7 @@ export default function Login() {
                 <button
                   className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium"
                   onClick={() => navigate("/register")}
+                  disabled={loading || checkingPasswordStatus}
                 >
                   Зарегистрироваться
                 </button>

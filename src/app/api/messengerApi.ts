@@ -1,6 +1,18 @@
 import { createApiError, isNetworkError, isAuthError } from '../utils/errorHandler';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:3001/api';
+// Используем относительный путь для API, когда фронтенд и бэкенд на одном домене
+// Это работает как для локальной разработки, так и для публичного доступа через туннель
+const API_BASE = import.meta.env.VITE_API_BASE || (typeof window !== 'undefined' ? '/api' : 'http://localhost:3001/api');
+
+// Вспомогательная функция для построения URL
+function buildUrl(path: string, params?: Record<string, string>): string {
+  let url = `${API_BASE}${path}`;
+  if (params && Object.keys(params).length > 0) {
+    const searchParams = new URLSearchParams(params);
+    url += `?${searchParams.toString()}`;
+  }
+  return url;
+}
 
 export interface Chat {
   id: string;
@@ -41,12 +53,10 @@ export interface User {
  * Получить список чатов
  */
 export async function fetchChats(userId?: string): Promise<Chat[]> {
-  const url = new URL(`${API_BASE}/chats`);
-  if (userId) {
-    url.searchParams.append('userId', userId);
-  }
+  const params = userId ? { userId } : undefined;
+  const url = buildUrl('/chats', params);
   
-  const response = await fetch(url.toString());
+  const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`Failed to fetch chats: ${response.statusText}`);
   }
@@ -57,7 +67,8 @@ export async function fetchChats(userId?: string): Promise<Chat[]> {
  * Получить сообщения чата
  */
 export async function fetchMessages(chatId: string): Promise<Message[]> {
-  const response = await fetch(`${API_BASE}/chats/${chatId}/messages`);
+  const url = buildUrl(`/chats/${chatId}/messages`);
+  const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`Failed to fetch messages: ${response.statusText}`);
   }
@@ -122,14 +133,17 @@ export interface UsersResponse {
 
 export async function fetchUsers(search?: string, page: number = 1, limit: number = 20): Promise<UsersResponse> {
   try {
-    const url = new URL(`${API_BASE}/users`);
+    const params: Record<string, string> = {
+      page: page.toString(),
+      limit: limit.toString()
+    };
     if (search && search.trim() !== '') {
-      url.searchParams.append('search', search.trim());
+      params.search = search.trim();
     }
-    url.searchParams.append('page', page.toString());
-    url.searchParams.append('limit', limit.toString());
     
-    const response = await fetch(url.toString());
+    const url = buildUrl('/users', params);
+    
+    const response = await fetch(url);
     
     if (!response.ok) {
       let errorMessage = `Ошибка загрузки пользователей: ${response.status} ${response.statusText}`;
